@@ -91,6 +91,8 @@ test("ensureSecurityRule creates the rule only when none exists", async () => {
   let calls = stubFetch([{ body: { data: [] } }, { body: { data: { id: "1", type: "securityRules", attributes: { name: "Preview" } } } }]);
   await forge().ensureSecurityRule("7", "Preview", "preview", "pw");
   assert.deepEqual(calls.map((c) => c.method), ["GET", "POST"]);
+  // Forge allows only path and status filters on this list, so the name is matched in code.
+  assert.equal(calls[0].url, "https://forge.laravel.com/api/orgs/acme/servers/5/sites/7/security-rules");
   assert.equal(calls[1].url, "https://forge.laravel.com/api/orgs/acme/servers/5/sites/7/security-rules");
   calls = stubFetch([{ body: { data: [{ id: "1", type: "securityRules", attributes: { name: "Preview" } }] } }]);
   await forge().ensureSecurityRule("7", "Preview", "preview", "pw");

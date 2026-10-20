@@ -103,9 +103,11 @@ export class Forge {
     } while (cursor);
   }
 
-  // Server-side filter, then an exact match: filter[name] may be a partial match.
-  async #findByName<A extends { name: string }>(path: string, name: string) {
-    for await (const item of this.#list<A>(`${path}?filter[name]=${encodeURIComponent(name)}`)) {
+  // Server-side filter where the endpoint allows it (Forge answers 400 for an unknown filter),
+  // then an exact match, since filter[name] may be a partial match.
+  async #findByName<A extends { name: string }>(path: string, name: string, { filter = true } = {}) {
+    const query = filter ? `?filter[name]=${encodeURIComponent(name)}` : "";
+    for await (const item of this.#list<A>(path + query)) {
       if (item.attributes.name === name) return item;
     }
     return null;
@@ -163,7 +165,8 @@ export class Forge {
 
   // Idempotent: a run that failed between site creation and the rule must still end with basic auth.
   async ensureSecurityRule(siteId: string, name: string, username: string, password: string) {
-    if (await this.#findByName<NamedAttrs>(`/sites/${siteId}/security-rules`, name)) return;
+    // Security rules allow only path and status filters.
+    if (await this.#findByName<NamedAttrs>(`/sites/${siteId}/security-rules`, name, { filter: false })) return;
     // No path: the rule protects the whole site.
     await this.#request<void>("POST", `/sites/${siteId}/security-rules`, {
       name,
@@ -172,7 +175,8 @@ export class Forge {
   }
 
   findDomain(siteId: string, name: string) {
-    return this.#findByName<NamedAttrs>(`/sites/${siteId}/domains`, name);
+    // A site has a handful of domain records; no need to depend on this list accepting a name filter.
+    return this.#findByName<NamedAttrs>(`/sites/${siteId}/domains`, name, { filter: false });
   }
 
   // Idempotent: clones the certificate onto the domain record unless it already has one.
