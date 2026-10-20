@@ -64,3 +64,8 @@ test("readExampleEnv prefers .env.example.dev over .env.example", () => {
   writeFileSync(join(dir, ".env.example.dev"), "A=dev\n");
   assert.deepEqual(readExampleEnv(dir), { A: "dev" });
 });
+
+test("parseDotenv drops inline comments like phpdotenv", () => {
+  const vars = parseDotenv(`A=value # inline comment\nB="x" # c\nC='y # not a comment'\nD=http://h/#anchor\nE=#\n`);
+  assert.deepEqual(vars, { A: "value", B: "x", C: "y # not a comment", D: "http://h/#anchor", E: "" });
+});

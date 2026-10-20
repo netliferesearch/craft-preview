@@ -19,14 +19,22 @@ export function parseDotenv(text: string): Record<string, string> {
     const eq = line.indexOf("=");
     if (eq < 1) throw new Error(`Invalid env line: ${line.slice(0, 40)}`);
     const key = line.slice(0, eq).trim();
-    let value = line.slice(eq + 1).trim();
-    const quote = value[0];
-    if ((quote === '"' || quote === "'") && value.length >= 2 && value.endsWith(quote)) {
-      value = value.slice(1, -1);
-    }
-    vars[key] = value;
+    vars[key] = parseValue(line.slice(eq + 1).trim());
   }
   return vars;
+}
+
+// Mirrors phpdotenv: a quoted value ends at its closing quote; an unquoted one ends at " #" or a
+// leading "#". Anything after that is a comment.
+function parseValue(raw: string): string {
+  const quote = raw[0];
+  if (quote === '"' || quote === "'") {
+    const close = raw.indexOf(quote, 1);
+    if (close > 0) return raw.slice(1, close);
+  }
+  if (raw.startsWith("#")) return "";
+  const comment = raw.indexOf(" #");
+  return (comment >= 0 ? raw.slice(0, comment) : raw).trim();
 }
 
 export function readExampleEnv(dir: string): Record<string, string> {

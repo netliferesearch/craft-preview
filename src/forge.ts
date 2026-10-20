@@ -32,6 +32,7 @@ export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve
 export function siteReady(site: Resource<SiteAttrs>): boolean {
   const { status, repository, name } = site.attributes;
   if (status === "failed") throw new Error(`Site ${name} failed to install`);
+  if (repository?.status === "failed") throw new Error(`Site ${name}: repository failed to install`);
   return !["creating", "installing"].includes(status) && repository?.status === "installed";
 }
 
@@ -160,7 +161,9 @@ export class Forge {
     ).data;
   }
 
-  async createSecurityRule(siteId: string, name: string, username: string, password: string) {
+  // Idempotent: a run that failed between site creation and the rule must still end with basic auth.
+  async ensureSecurityRule(siteId: string, name: string, username: string, password: string) {
+    if (await this.#findByName<NamedAttrs>(`/sites/${siteId}/security-rules`, name)) return;
     // No path: the rule protects the whole site.
     await this.#request<void>("POST", `/sites/${siteId}/security-rules`, {
       name,
@@ -172,8 +175,12 @@ export class Forge {
     return this.#findByName<NamedAttrs>(`/sites/${siteId}/domains`, name);
   }
 
-  async createCertificate(siteId: string, domainId: string, body: Record<string, unknown>) {
-    await this.#request<void>("POST", `/sites/${siteId}/domains/${domainId}/certificates`, body);
+  // Idempotent: clones the certificate onto the domain record unless it already has one.
+  async ensureCertificate(siteId: string, domainId: string, certificateId: number) {
+    const path = `/sites/${siteId}/domains/${domainId}/certificates`;
+    const existing = await this.#request<{ data: unknown[] }>("GET", path);
+    if (existing.data.length > 0) return;
+    await this.#request<void>("POST", path, { type: "clone", enable: true, clone: { certificate_id: certificateId } });
   }
 
   // ---- Databases -----------------------------------------------------------

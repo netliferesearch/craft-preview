@@ -28,4 +28,16 @@ test_action_yml_structure() {
   assert_eq ok "$out" "action.yml structure"
 }
 
+test_example_workflow_gates_the_job() {
+  local out; out="$(cd "$ROOT" && ruby -ryaml -e '
+    w = YAML.load_file("examples/client-repo/.github/workflows/preview.yml")
+    cond = w.dig("jobs","preview","if").to_s
+    abort "job needs a fork guard" unless cond.include?("head.repo.full_name == github.repository")
+    abort "job needs the label guard" unless cond.include?("contains(github.event.pull_request.labels.*.name, '"'"'preview'"'"')")
+    abort "job must still run for closed and sweep" unless cond.include?("closed") && cond.include?("pull_request")
+    puts "ok"
+  ' 2>&1)"
+  assert_eq ok "$out" "preview.yml job if"
+}
+
 run_tests

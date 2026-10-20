@@ -20,6 +20,15 @@ concurrency:
 
 jobs:
   preview:
+    # Only PR events that can matter reach the runner: same-repo PRs that carry the preview label,
+    # just got it, or just lost it, plus every close; the sweep triggers always run. The action makes
+    # the final decision from the event, so this gate only saves runner minutes and concurrency slots.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       (github.event.action == 'closed' ||
+        github.event.label.name == 'preview' ||
+        contains(github.event.pull_request.labels.*.name, 'preview')))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

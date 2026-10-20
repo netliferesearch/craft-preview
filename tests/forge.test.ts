@@ -82,3 +82,27 @@ test("a 429 is retried after retry-after", async () => {
   assert.equal(calls.length, 2);
   assert.equal(s.attributes.name, "pr-42-nch.on-forge.com");
 });
+
+test("siteReady throws when the repository install failed", () => {
+  assert.throws(() => siteReady(site("x", { status: "installed", repository: { status: "failed" } })), /x.*repository/);
+});
+
+test("ensureSecurityRule creates the rule only when none exists", async () => {
+  let calls = stubFetch([{ body: { data: [] } }, { body: { data: { id: "1", type: "securityRules", attributes: { name: "Preview" } } } }]);
+  await forge().ensureSecurityRule("7", "Preview", "preview", "pw");
+  assert.deepEqual(calls.map((c) => c.method), ["GET", "POST"]);
+  assert.equal(calls[1].url, "https://forge.laravel.com/api/orgs/acme/servers/5/sites/7/security-rules");
+  calls = stubFetch([{ body: { data: [{ id: "1", type: "securityRules", attributes: { name: "Preview" } }] } }]);
+  await forge().ensureSecurityRule("7", "Preview", "preview", "pw");
+  assert.deepEqual(calls.map((c) => c.method), ["GET"]);
+});
+
+test("ensureCertificate clones only when the domain has no certificate", async () => {
+  let calls = stubFetch([{ body: { data: [] } }, { body: { data: { id: "9", type: "certificates", attributes: {} } } }]);
+  await forge().ensureCertificate("7", "3", 12);
+  assert.deepEqual(calls.map((c) => c.method), ["GET", "POST"]);
+  assert.equal(calls[1].url, "https://forge.laravel.com/api/orgs/acme/servers/5/sites/7/domains/3/certificates");
+  calls = stubFetch([{ body: { data: [{ id: "9", type: "certificates", attributes: {} }] } }]);
+  await forge().ensureCertificate("7", "3", 12);
+  assert.deepEqual(calls.map((c) => c.method), ["GET"]);
+});

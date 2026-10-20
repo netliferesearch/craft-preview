@@ -17,6 +17,15 @@ function required(key: string): string {
 const optional = (key: string) => process.env[key] || undefined;
 
 const LABEL = "preview";
+
+// Decided before anything else is read: a skipped run (fork, other label) has no secrets to read.
+const event = readEvent(required("GITHUB_EVENT_NAME"), required("GITHUB_EVENT_PATH"));
+const command: Command = (process.argv[2] as Command | undefined) || resolveCommand(event, LABEL);
+if (command === "skip") {
+  console.log(`Nothing to do for ${event.event_name}/${event.action ?? ""} without the ${LABEL} label`);
+  process.exit(0);
+}
+
 const cfg = loadConfig(required("CONFIG_PATH"));
 const repo = required("GITHUB_REPOSITORY");
 const secret = required("PREVIEW_SECRET");
@@ -27,8 +36,6 @@ function output(key: string, value: string) {
   const file = process.env.GITHUB_OUTPUT;
   if (file) appendFileSync(file, `${key}=${value}\n`);
 }
-
-const event = readEvent(required("GITHUB_EVENT_NAME"), required("GITHUB_EVENT_PATH"));
 
 function pullRequest(): { number: number; branch: string; sha: string } {
   const pr = event.pull_request;
@@ -75,6 +82,8 @@ async function up() {
 
   let site = await forge.findSiteByLabel(n.label);
 
+  // Every run converges: a run that failed between site creation and the security rule must not
+  // leave a public preview behind, so readiness, certificate and basic auth are ensured each time.
   if (!site) {
     // A leftover database from an earlier failed run is reused rather than recreated.
     if (!(await forge.findDatabase(n.db))) {
@@ -89,21 +98,19 @@ async function up() {
 
     console.log(`Creating site ${n.siteName}`);
     site = await createSite(n, pr.branch);
-
-    if (cfg.domain.mode === "custom") {
-      // The certificate goes on before basic auth so nothing blocks the domain's first request.
-      const record = await forge.findDomain(site.id, n.siteName);
-      if (!record) throw new Error(`No domain record found for ${n.siteName}`);
-      await forge.createCertificate(site.id, record.id, {
-        type: "clone",
-        enable: true,
-        clone: { certificate_id: cfg.domain.certificateId },
-      });
-    }
-    await forge.createSecurityRule(site.id, "Preview", required("BASIC_AUTH_USER"), required("BASIC_AUTH_PASSWORD"));
+  } else if (!siteReady(site)) {
+    site = await waitUntil(`site ${n.siteName}`, () => forge.getSite(site!.id), siteReady);
   }
 
   const siteId = site.id;
+  if (cfg.domain.mode === "custom") {
+    // The certificate goes on before basic auth so nothing blocks the domain's first request.
+    const record = await forge.findDomain(siteId, n.siteName);
+    if (!record) throw new Error(`No domain record found for ${n.siteName}`);
+    await forge.ensureCertificate(siteId, record.id, cfg.domain.certificateId);
+  }
+  await forge.ensureSecurityRule(siteId, "Preview", required("BASIC_AUTH_USER"), required("BASIC_AUTH_PASSWORD"));
+
   const origin = originFor(site.attributes);
   const adminEmail = required("ADMIN_EMAIL");
 
@@ -209,7 +216,6 @@ async function sweep(): Promise<number[]> {
 
 // ---- Main -------------------------------------------------------------------
 
-const command: Command = (process.argv[2] as Command | undefined) ?? resolveCommand(event, LABEL);
 try {
   switch (command) {
     case "up":
@@ -222,9 +228,6 @@ try {
     }
     case "sweep":
       output("removed", (await sweep()).join(" "));
-      break;
-    case "skip":
-      console.log(`Nothing to do for ${event.event_name}/${event.action ?? ""} without the ${LABEL} label`);
       break;
     default:
       throw new Error(`Unknown command "${command}". Use up, down or sweep.`);
