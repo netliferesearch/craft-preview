@@ -46,7 +46,11 @@ export class GitHub {
     await this.#request("POST", `/issues/${pr}/comments`, { body: text });
   }
 
-  async prState(pr: number): Promise<"open" | "closed"> {
-    return (await this.#request<{ state: "open" | "closed" }>("GET", `/pulls/${pr}`)).state;
+  async prInfo(pr: number): Promise<{ state: "open" | "closed"; labels: string[] }> {
+    const data = await this.#request<{ state: "open" | "closed"; labels: { name: string }[] }>(
+      "GET",
+      `/pulls/${pr}`,
+    );
+    return { state: data.state, labels: data.labels.map((l) => l.name) };
   }
 }
