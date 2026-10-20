@@ -1,0 +1,57 @@
+name: Craft preview
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, closed]
+  schedule:
+    - cron: "0 3 * * *" # nightly sweep of closed and stale previews
+  workflow_dispatch: # manual sweep
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  # One run at a time per PR, and never cancel mid-provision.
+  group: craft-preview-${{ github.event.pull_request.number || 'sweep' }}
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    # PRs from forks don't get secrets, so skip them instead of failing.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A closed PR's merge ref may be gone, so teardown reads config from the default branch.
+          ref: ${{ github.event.action == 'closed' && github.event.repository.default_branch || '' }}
+          sparse-checkout: .craft-preview.json
+          sparse-checkout-cone-mode: false
+
+      - id: preview
+        uses: netliferesearch/craft-preview@v1
+        with:
+          command: ${{ github.event_name != 'pull_request' && 'sweep' || github.event.action == 'closed' && 'down' || 'up' }}
+          forge-token: ${{ secrets.FORGE_API_TOKEN }}
+          forge-org: ${{ vars.FORGE_ORG }}
+          forge-server-id: ${{ vars.FORGE_PREVIEW_SERVER_ID }}
+          preview-domain: ${{ vars.PREVIEW_DOMAIN }}
+          preview-secret: ${{ secrets.PREVIEW_SECRET }}
+          basic-auth-password: ${{ secrets.PREVIEW_BASIC_AUTH_PASSWORD }}
+          test-email: previews@netlife.no
+          spaces-key: ${{ secrets.SPACES_KEY }}
+          spaces-secret: ${{ secrets.SPACES_SECRET }}
+          spaces-region: fra1
+          spaces-bucket: netlife-previews
+          # Client-specific secrets, appended to the preview's .env
+          extra-env: |
+            ASSETS_KEY=${{ secrets.SPACES_KEY }}
+            ASSETS_SECRET=${{ secrets.SPACES_SECRET }}
+
+      # The preview URL is available to later steps, e.g. for Playwright or visual diffs:
+      # - run: npx playwright test
+      #   if: steps.preview.outputs.url != ''
+      #   env:
+      #     BASE_URL: ${{ steps.preview.outputs.url }}

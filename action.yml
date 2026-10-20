@@ -1,0 +1,127 @@
+name: Craft CMS preview on Forge
+description: Create, update and tear down per-PR Craft CMS preview sites on a Laravel Forge server.
+
+inputs:
+  command:
+    description: "up (create or update), down (tear down), or sweep (clean up closed and stale previews)"
+    required: true
+  config-path:
+    description: Path to the client's preview config
+    default: .craft-preview.json
+  forge-token:
+    description: Forge API token
+    required: true
+  forge-org:
+    description: Forge organization slug
+    required: true
+  forge-server-id:
+    description: ID of the dedicated preview server in Forge
+    required: true
+  preview-domain:
+    description: Base domain with a wildcard DNS record pointing at the server, e.g. preview.netlife.no
+    required: true
+  preview-secret:
+    description: Long random string. Per-preview DB passwords, security keys and admin passwords are derived from it.
+    required: true
+  basic-auth-user:
+    default: preview
+  basic-auth-password:
+    required: true
+  db-driver:
+    description: mysql or pgsql, matching the database installed on the preview server
+    default: mysql
+  test-email:
+    description: All outgoing mail from previews is redirected here (Craft's testToEmailAddress)
+    default: ""
+  security-key:
+    description: Optional. Set to the snapshot source's CRAFT_SECURITY_KEY if restored data contains encrypted values.
+    default: ""
+  extra-env:
+    description: Extra KEY=VALUE lines appended to every preview's .env (use for client secrets)
+    default: ""
+  spaces-key:
+    default: ""
+  spaces-secret:
+    default: ""
+  spaces-region:
+    description: DigitalOcean Spaces region, e.g. fra1 or ams3
+    default: ""
+  spaces-bucket:
+    description: Bucket holding DB snapshots (snapshots/…) and preview uploads (previews/…)
+    default: ""
+  github-token:
+    default: ${{ github.token }}
+
+outputs:
+  url:
+    description: The preview URL (set by `up`)
+    value: ${{ steps.run.outputs.url }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 24
+
+    - name: Install dependencies
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: npm ci --omit=dev --no-audit --no-fund
+
+    - name: Presign DB snapshot
+      id: snapshot
+      if: inputs.command == 'up' && inputs.spaces-bucket != ''
+      shell: bash
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.spaces-key }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.spaces-secret }}
+        AWS_DEFAULT_REGION: ${{ inputs.spaces-region }}
+        BUCKET: ${{ inputs.spaces-bucket }}
+        CONFIG_PATH: ${{ inputs.config-path }}
+      run: |
+        key=$(jq -r '.snapshotKey // empty' "$CONFIG_PATH")
+        if [ -n "$key" ]; then
+          url=$(aws s3 presign "s3://$BUCKET/$key" --expires-in 604800 \
+            --endpoint-url "https://$AWS_DEFAULT_REGION.digitaloceanspaces.com")
+          echo "::add-mask::$url"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Run ${{ inputs.command }}
+      id: run
+      shell: bash
+      env:
+        COMMAND: ${{ inputs.command }}
+        CONFIG_PATH: ${{ inputs.config-path }}
+        FORGE_TOKEN: ${{ inputs.forge-token }}
+        FORGE_ORG: ${{ inputs.forge-org }}
+        FORGE_SERVER_ID: ${{ inputs.forge-server-id }}
+        PREVIEW_DOMAIN: ${{ inputs.preview-domain }}
+        PREVIEW_SECRET: ${{ inputs.preview-secret }}
+        BASIC_AUTH_USER: ${{ inputs.basic-auth-user }}
+        BASIC_AUTH_PASSWORD: ${{ inputs.basic-auth-password }}
+        DB_DRIVER: ${{ inputs.db-driver }}
+        TEST_EMAIL: ${{ inputs.test-email }}
+        CRAFT_SECURITY_KEY: ${{ inputs.security-key }}
+        EXTRA_ENV: ${{ inputs.extra-env }}
+        SNAPSHOT_URL: ${{ steps.snapshot.outputs.url }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: node "$GITHUB_ACTION_PATH/src/cli.ts" "$COMMAND"
+
+    - name: Remove preview uploads
+      if: always() && inputs.spaces-bucket != '' && steps.run.outputs.removed != ''
+      shell: bash
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.spaces-key }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.spaces-secret }}
+        AWS_DEFAULT_REGION: ${{ inputs.spaces-region }}
+        BUCKET: ${{ inputs.spaces-bucket }}
+        CONFIG_PATH: ${{ inputs.config-path }}
+        REMOVED: ${{ steps.run.outputs.removed }}
+      run: |
+        slug=$(jq -r '.slug' "$CONFIG_PATH")
+        for pr in $REMOVED; do
+          aws s3 rm "s3://$BUCKET/previews/$slug/pr-$pr" --recursive \
+            --endpoint-url "https://$AWS_DEFAULT_REGION.digitaloceanspaces.com"
+        done

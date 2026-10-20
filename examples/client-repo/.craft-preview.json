@@ -1,0 +1,10 @@
+{
+  "slug": "nch",
+  "phpVersion": "php82",
+  "webDirectory": "/web",
+  "buildCommand": "npm ci && npm run build",
+  "snapshotKey": "snapshots/nch/latest.sql.gz",
+  "siteUrls": { "PRIMARY_SITE_URL": "/" },
+  "ssl": { "mode": "clone", "certificateId": 0 },
+  "maxAgeDays": 14
+}
