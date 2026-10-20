@@ -1,98 +1,130 @@
 # craft-preview
 
-Per-PR preview sites for Craft CMS projects, on a Laravel Forge server (DigitalOcean).
+Per-PR preview sites for Craft CMS projects, on a Laravel Forge server.
 
-Opening a PR creates `pr-42-acme.preview.netlife.no`: a Forge site on the PR branch, with its own database
-seeded from a sanitized staging snapshot, behind basic auth. Every push redeploys it. Closing the PR
-removes the site, database, DB user and uploaded files. A nightly sweep catches anything the close event missed.
+Add the `preview` label to a PR and a few minutes later the PR has a link: a Forge site on the PR
+branch, seeded from the same scrubbed database snapshot that `verify` uses, reachable over HTTPS
+on a Forge-provided `on-forge.com` hostname, behind basic auth. Every push to the PR redeploys it.
+Removing the label, closing the PR, or the nightly sweep removes the site, its database and user.
 
-It's a composite GitHub Action. This repo holds the fixed core; each client repo carries a small
+It is a composite GitHub Action. This repo holds the fixed core; each client repo carries a small
 `.craft-preview.json` and a short workflow that calls it (see `examples/client-repo/`).
 
-## How a preview is built
+Part of Netlife's Craft fleet update automation. Previews are for the PRs automation hands back
+to people: Craft minor updates and anything else that cannot automerge on `verify` alone.
+Design: `docs/superpowers/specs/2026-10-19-craft-preview-design.md`.
 
-1. **Database**: `pv_<slug>_<pr>` plus a matching user, created via the Forge API.
-2. **Site**: a PHP site on the PR branch, web directory `/web`, in-place deploys, sharing the server's PHP-FPM pool.
-3. **SSL, then basic auth**: the certificate is issued before basic auth so the HTTP-01 challenge isn't blocked.
-4. **`.env`**: generated on every run. All per-preview secrets are derived from `PREVIEW_SECRET` + hostname,
-   so there's no state to store and config changes reach existing previews on their next push.
-5. **Deploy** (`deploy-script.sh`): composer install and the optional build. On the first deploy it restores
-   the snapshot, or does a fresh install from project config if there's no snapshot. Then `craft up`.
+## What happens
 
-Previews run with `allowAdminChanges=false` (schema changes only come from the PR), `disallowRobots`,
-the queue running automatically, and all outgoing mail redirected to `test-email`.
+| Event on the PR | Result |
+| --- | --- |
+| `preview` label added | Site created and deployed. Comment with the URL, basic auth user and admin login. |
+| Push while labelled | Redeployed. Same database, so content survives; the PR's migrations and project config are applied. |
+| `preview` label removed, or PR closed | Site, database and DB user removed. |
+| Nightly sweep (03:00 UTC) | Removes previews whose PR is closed, lost the label, or is older than `maxAgeDays`. |
+
+PRs from forks are skipped (no secrets). Other labels do nothing.
+
+### How a preview is built
+
+1. **Database** `pv_<slug>_<pr>` plus a matching user, through the Forge API.
+2. **Site** named `pr-<pr>-<slug>`, a PHP site on the PR branch, web directory `/web`, in-place
+   deploys, sharing the server's PHP-FPM pool. Forge assigns `<name>.on-forge.com` with HTTPS.
+3. **Basic auth** on the whole site.
+4. **`.env`**, regenerated on every run: the repo's `.env.example` (or `.env.example.dev`) first,
+   then the preview values on top, then the manifest's `env`, then the workflow's `extra-env`.
+   Per-preview secrets are derived from `PREVIEW_SECRET` and the site name, so nothing is stored.
+5. **Deploy** (`deploy-script.sh`): fetch and hard-reset to the branch, `composer install`, the
+   optional build command. On the first deploy it restores the snapshot (or installs Craft from
+   project config when the manifest has no snapshot) and creates the `preview` admin user, because
+   the snapshot has every password scrubbed. Then `craft up`.
+
+Previews run with `CRAFT_ENVIRONMENT=preview`, dev mode off, admin changes on (update migrations
+write project config; the branch stays the source of truth because every push redeploys),
+robots disallowed and the queue running automatically. Mail is not configured: the preview server
+blocks SMTP ports, so a send attempt is logged and nothing leaves. Uploads are not supported.
+
+### The Craft license banner
+
+Craft treats `pr-42-nch.on-forge.com` as a public domain, so the control panel shows a
+license-mismatch banner on previews. The front end is unaffected. Accepted for now; the manifest's
+`domain` block can switch a site to a custom catch-all domain later (see below).
 
 ## One-time setup
 
-**Preview server.** Provision a dedicated droplet in Forge (4–8 GB RAM) with MySQL or Postgres and the
-PHP versions your Craft sites need. Keep it separate from client production and staging servers.
-Make sure Forge's GitHub connection can read every client repo that will use previews.
+**Preview server.** In Forge, create a Laravel VPS app server (Ubuntu 24.04, MySQL, the PHP
+versions your sites need, Medium or Large, an EU region). Keep it separate from client production
+and staging servers. Confirm Redis is running (Forge app servers ship it; sites that cache in Redis
+expect it on localhost). Make sure Forge's GitHub connection can read every client repo that will
+use previews.
 
-**DNS.** Add a wildcard record `*.preview.netlife.no` pointing at the droplet.
+**Snapshots.** Produced by `netliferesearch/craft-ci`'s nightly job into `netlife-craft-snapshots`
+(`fra1`) as `snapshots/<slug>/latest.sql.gz`. The action presigns a 7-day URL with the same
+read-only key `verify` uses, so the preview server never holds bucket credentials.
 
-**SSL.** Either:
-- `"ssl": { "mode": "clone", "certificateId": … }` *(recommended)*. Create an anchor site on the server,
-  issue a wildcard cert for `*.preview.netlife.no` on it with DNS-01 verification, and use that cert's ID.
-  Every preview clones it instantly, with no Let's Encrypt rate limits.
-- `"ssl": { "mode": "letsencrypt" }`. One HTTP-01 cert per preview. Fine at low volume, but Let's Encrypt
-  limits certificates per registered domain per week.
-
-**Snapshots.** A separate nightly job (not included here) should dump each client's staging database,
-scrub users, form submissions and other PII, and upload it to `snapshots/<slug>/latest.sql.gz` in the bucket.
-The action presigns a 7-day URL, so the preview server never holds bucket credentials.
-
-**Organization secrets and variables** (Settings → Secrets and variables → Actions, at org level):
+**Secrets and variables** (org level once available, repo level until then):
 
 | Name | Kind | Value |
-|---|---|---|
-| `FORGE_API_TOKEN` | secret | Forge API token |
-| `PREVIEW_SECRET` | secret | Long random string (`openssl rand -hex 32`) |
+| --- | --- | --- |
+| `FORGE_API_TOKEN` | secret | Forge API token. Scopes: site create, delete, meta, manage-deploys, manage-environment, manage-security, manage-ssl; server view, create-databases, delete-databases. |
+| `PREVIEW_SECRET` | secret | `openssl rand -hex 32` |
 | `PREVIEW_BASIC_AUTH_PASSWORD` | secret | Shared basic auth password for previews |
-| `SPACES_KEY`, `SPACES_SECRET` | secret | DigitalOcean Spaces access key |
+| `SNAPSHOT_READ_KEY`, `SNAPSHOT_READ_SECRET` | secret | Already present for `verify` |
 | `FORGE_ORG` | variable | Forge organization slug |
 | `FORGE_PREVIEW_SERVER_ID` | variable | ID of the preview server |
-| `PREVIEW_DOMAIN` | variable | `preview.netlife.no` |
-
-**Repo access.** If this repo is private, allow other repos in the org to use it:
-Settings → Actions → General → Access → "Accessible from repositories in the organization".
 
 ## Onboarding a client repo
 
 1. Copy `examples/client-repo/.craft-preview.json` and `.github/workflows/preview.yml` into the repo.
-2. Set `slug` (2–12 chars) and adjust `siteUrls` for multi-site setups.
-3. Point the project's asset volumes at the bucket using env vars, with `$ASSETS_SUBPATH` as the subpath,
-   so each preview's uploads land under `previews/<slug>/pr-<n>/` and are deleted on teardown.
-4. Open a PR.
+2. Set `slug` (2 to 12 chars), `phpVersion`, `buildCommand` and `snapshotKey`. Adjust `siteUrls`
+   for multi-site setups.
+3. Create the `preview` label in the repo.
+4. If the site keeps assets in S3, pass read-only credentials through `extra-env` so images render.
+5. Label a PR.
+
+### Manifest
+
+| Field | Default | Notes |
+| --- | --- | --- |
+| `slug` | required | Lowercase, 2 to 12 chars, starts with a letter. Used in site and DB names. |
+| `phpVersion` | `php84` | `php82` to `php85` |
+| `webDirectory` | `/web` | |
+| `buildCommand` | none | Runs on the server during deploy |
+| `snapshotKey` | none | Omit for a fresh install from project config |
+| `siteUrls` | `{ "PRIMARY_SITE_URL": "/" }` | Env var to path, resolved against the preview origin |
+| `env` | `{}` | Non-secret env vars for this client |
+| `domain` | `{ "mode": "on-forge" }` | See below |
+| `language` | `nb-NO` | Fresh installs only |
+| `maxAgeDays` | `14` | The sweep removes older previews even if the PR is open |
+
+### Custom catch-all domain (later)
+
+`"domain": { "mode": "custom", "baseDomain": "preview.netlife.no", "certificateId": 123 }` names
+sites `pr-42-nch.preview.netlife.no` and clones the given certificate onto each one. It needs a
+wildcard DNS record for the base domain and an anchor site in Forge holding a DNS-01 wildcard
+certificate. Craft treats a `preview` subdomain as a development domain, so the license banner
+goes away. The code path exists; it has not been run.
 
 ## First-run checklist
 
-The Forge API v2 endpoints for creating sites, databases, env, deploy scripts, deployments, security rules
-and certificates were checked against Forge's API reference. These were **not** confirmed, and are marked
-`VERIFY` in `src/forge.ts`:
+On the first preview, with a developer watching:
 
-- `GET` and `DELETE /sites/{site}`
-- `GET /database/schemas`, `GET` and `DELETE /database/schemas/{id}`
-- `GET /database/users`, `DELETE /database/users/{id}`
-- `GET /sites/{site}/domains`, and that domain records expose `name`
-
-Also check on the first preview:
-
-- The site gets `/web` as its web directory. v2 might expect a different path format than `/web`.
-- Deleting a site also removes its security rule and certificate.
-- `craft install/craft` and `craft db/restore` run cleanly for a Craft 5 project on the server.
-
-## Capacity and cost
-
-Non-isolated sites share one PHP-FPM pool, so idle previews cost little beyond disk and the database.
-The main memory spike is `npm run build` on the server. If several PRs deploy at once and the droplet
-struggles, move the frontend build into GitHub Actions and ship the built assets instead.
+1. On-forge naming through the API: what the site `name` produced, the hostname in the site
+   resource, HTTPS answering before the security rule, basic auth after it.
+2. `/web` is the web directory; the deployment log shows `db/restore`, `users/create`, `up`.
+3. The site renders with images; the control panel logs in as `preview` with the comment's
+   password and shows the license banner only.
+4. Push, unlabel, relabel, close, and the next morning's sweep.
 
 ## Development
 
 ```bash
+nvm use 24
 npm install
-npm run typecheck
+npm run check          # typecheck + node:test
+bash tests/deploy-script.test.sh
+bash tests/action-yml.test.sh
 ```
 
-The action runs `src/cli.ts` directly on Node 24 with built-in type stripping. There's no build step,
-so only erasable TypeScript syntax is allowed (no enums, namespaces or parameter properties).
+The action runs `src/cli.ts` directly on Node 24 with built-in type stripping. There is no build
+step, so only erasable TypeScript syntax is allowed (no enums, namespaces or parameter properties).
