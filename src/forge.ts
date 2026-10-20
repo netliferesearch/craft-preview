@@ -1,7 +1,5 @@
 // Thin client for the Laravel Forge API v2, scoped to one organization and one server.
-//
-// Endpoints marked VERIFY follow v2's REST conventions but weren't confirmed against
-// the published docs when this was written. Check them on the first real run.
+// Paths checked against the published OpenAPI spec (forge.laravel.com/api/docs.openapi), Oct 2026.
 
 const BASE = "https://forge.laravel.com/api";
 
@@ -10,6 +8,7 @@ export type Resource<A> = { id: string; type: string; attributes: A };
 export type SiteAttrs = {
   name: string;
   status: string;
+  url: string | null;
   created_at: string | null;
   repository: { status: string | null } | null;
 };
@@ -29,6 +28,18 @@ export class ForgeError extends Error {
 
 export const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Throws on a failed install; true once the site and its repository are installed.
+export function siteReady(site: Resource<SiteAttrs>): boolean {
+  const { status, repository, name } = site.attributes;
+  if (status === "failed") throw new Error(`Site ${name} failed to install`);
+  return !["creating", "installing"].includes(status) && repository?.status === "installed";
+}
+
+export function deploymentOutcome(status: string): "running" | "finished" | "failed" {
+  if (["pending", "queued", "deploying"].includes(status)) return "running";
+  return status === "finished" ? "finished" : "failed";
+}
+
 export async function waitUntil<T>(
   label: string,
   poll: () => Promise<T>,
@@ -47,14 +58,18 @@ export async function waitUntil<T>(
 export class Forge {
   #token: string;
   #base: string;
+  #orgBase: string;
 
   constructor(token: string, org: string, serverId: string) {
     this.#token = token;
-    this.#base = `${BASE}/orgs/${encodeURIComponent(org)}/servers/${serverId}`;
+    this.#orgBase = `${BASE}/orgs/${encodeURIComponent(org)}`;
+    this.#base = `${this.#orgBase}/servers/${serverId}`;
   }
 
+  // Server-scoped unless the path is absolute (starts with the API base).
   async #request<T>(method: string, path: string, body?: unknown, attempt = 0): Promise<T> {
-    const res = await fetch(this.#base + path, {
+    const url = path.startsWith(BASE) ? path : this.#base + path;
+    const res = await fetch(url, {
       method,
       headers: {
         Authorization: `Bearer ${this.#token}`,
@@ -79,15 +94,17 @@ export class Forge {
   async *#list<A>(path: string): AsyncGenerator<Resource<A>> {
     let cursor: string | null = null;
     do {
-      const query: string = cursor ? `?page[cursor]=${encodeURIComponent(cursor)}` : "";
+      const sep = path.includes("?") ? "&" : "?";
+      const query: string = cursor ? `${sep}page[cursor]=${encodeURIComponent(cursor)}` : "";
       const page: Page<A> = await this.#request<Page<A>>("GET", path + query);
       yield* page.data;
       cursor = page.meta?.next_cursor ?? null;
     } while (cursor);
   }
 
+  // Server-side filter, then an exact match: filter[name] may be a partial match.
   async #findByName<A extends { name: string }>(path: string, name: string) {
-    for await (const item of this.#list<A>(path)) {
+    for await (const item of this.#list<A>(`${path}?filter[name]=${encodeURIComponent(name)}`)) {
       if (item.attributes.name === name) return item;
     }
     return null;
@@ -99,13 +116,18 @@ export class Forge {
     return this.#list<SiteAttrs>("/sites");
   }
 
-  findSite(name: string) {
-    return this.#findByName<SiteAttrs>("/sites", name);
+  // The site is asked for by label; Forge names it after the hostname it assigns.
+  async findSiteByLabel(label: string) {
+    for await (const site of this.#list<SiteAttrs>("/sites")) {
+      const { name } = site.attributes;
+      if (name === label || name.startsWith(`${label}.`)) return site;
+    }
+    return null;
   }
 
   async getSite(siteId: string) {
-    // VERIFY: GET /sites/{site}
-    return (await this.#request<One<SiteAttrs>>("GET", `/sites/${siteId}`)).data;
+    // Site show lives under the organization, not the server.
+    return (await this.#request<One<SiteAttrs>>("GET", `${this.#orgBase}/sites/${siteId}`)).data;
   }
 
   async createSite(body: Record<string, unknown>) {
@@ -113,7 +135,6 @@ export class Forge {
   }
 
   async deleteSite(siteId: string) {
-    // VERIFY: DELETE /sites/{site}
     await this.#request<void>("DELETE", `/sites/${siteId}`);
   }
 
@@ -148,7 +169,6 @@ export class Forge {
   }
 
   findDomain(siteId: string, name: string) {
-    // VERIFY: GET /sites/{site}/domains, and that each record's attributes include `name`
     return this.#findByName<NamedAttrs>(`/sites/${siteId}/domains`, name);
   }
 
@@ -159,7 +179,6 @@ export class Forge {
   // ---- Databases -----------------------------------------------------------
 
   listDatabases() {
-    // VERIFY: GET /database/schemas
     return this.#list<NamedAttrs>("/database/schemas");
   }
 
@@ -175,22 +194,18 @@ export class Forge {
   }
 
   async getDatabase(databaseId: string) {
-    // VERIFY: GET /database/schemas/{id}
     return (await this.#request<One<NamedAttrs>>("GET", `/database/schemas/${databaseId}`)).data;
   }
 
   async deleteDatabase(databaseId: string) {
-    // VERIFY: DELETE /database/schemas/{id}
     await this.#request<void>("DELETE", `/database/schemas/${databaseId}`);
   }
 
   findDatabaseUser(name: string) {
-    // VERIFY: GET /database/users
     return this.#findByName<NamedAttrs>("/database/users", name);
   }
 
   async deleteDatabaseUser(userId: string) {
-    // VERIFY: DELETE /database/users/{id}
     await this.#request<void>("DELETE", `/database/users/${userId}`);
   }
 }

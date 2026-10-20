@@ -122,7 +122,7 @@ async function up() {
   const n = names(pr.number);
   await gh.upsertComment(pr.number, `⏳ Building preview for \`${pr.sha}\`…`);
 
-  let site = await forge.findSite(n.host);
+  let site = await forge.findSiteByLabel(n.host);
 
   if (!site) {
     // A leftover database from an earlier failed run is reused rather than recreated.
@@ -223,7 +223,7 @@ async function up() {
 
 async function down(pr: number, reason: string) {
   const n = names(pr);
-  const site = await forge.findSite(n.host);
+  const site = await forge.findSiteByLabel(n.host);
   if (site) await forge.deleteSite(site.id);
   const db = await forge.findDatabase(n.db);
   if (db) await forge.deleteDatabase(db.id);
