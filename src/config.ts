@@ -1,17 +1,17 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 
-const Ssl = z.discriminatedUnion("mode", [
-  z.object({ mode: z.literal("none") }),
-  // One Let's Encrypt cert per preview (HTTP-01). Simple, but counts against LE rate limits.
-  z.object({ mode: z.literal("letsencrypt") }),
-  // Clone an existing wildcard cert (*.preview.example.no) from another site on the server.
-  z.object({ mode: z.literal("clone"), certificateId: z.number().int() }),
+const Domain = z.discriminatedUnion("mode", [
+  // Forge assigns <label>.on-forge.com with HTTPS. Zero DNS. The default.
+  z.object({ mode: z.literal("on-forge") }),
+  // <label>.<baseDomain> with a wildcard certificate cloned from another site on the server.
+  // Needs wildcard DNS for baseDomain and an anchor site holding the certificate.
+  z.object({ mode: z.literal("custom"), baseDomain: z.string().min(1), certificateId: z.number().int() }),
 ]);
 
 // Per-client settings, read from .craft-preview.json in the client repo.
 // Infrastructure (Forge org, server, domain, secrets) comes from workflow inputs instead.
-export const PreviewConfig = z.object({
+export const PreviewConfig = z.strictObject({
   // Short client id used in hostnames and DB names: pr-42-acme.preview.netlife.no, pv_acme_42
   slug: z
     .string()
@@ -26,7 +26,7 @@ export const PreviewConfig = z.object({
   siteUrls: z.record(z.string(), z.string()).default({ PRIMARY_SITE_URL: "/" }),
   // Non-secret env vars for this client. Secrets go in the workflow's `extra-env` input.
   env: z.record(z.string(), z.string()).default({}),
-  ssl: Ssl.default({ mode: "letsencrypt" }),
+  domain: Domain.default({ mode: "on-forge" }),
   // Used only for fresh installs.
   language: z.string().default("nb-NO"),
   // The nightly sweep removes previews older than this even if the PR is open.

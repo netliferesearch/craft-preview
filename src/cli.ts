@@ -44,7 +44,7 @@ function derive(purpose: string, host: string, length = 32): string {
 function names(pr: number) {
   const host = `pr-${pr}-${cfg.slug}.${domain}`;
   const db = `pv_${cfg.slug}_${pr}`;
-  const scheme = cfg.ssl.mode === "none" ? "http" : "https";
+  const scheme = "https";
   return { host, db, dbUser: db, origin: `${scheme}://${host}` };
 }
 type Names = ReturnType<typeof names>;
@@ -107,14 +107,14 @@ function dotenv(pr: number, n: Names): string {
 // ---- Commands ---------------------------------------------------------------
 
 async function setupSsl(siteId: string, host: string) {
-  if (cfg.ssl.mode === "none") return;
+  if (cfg.domain.mode !== "custom") return;
   const record = await forge.findDomain(siteId, host);
   if (!record) throw new Error(`No domain record found for ${host}`);
-  const body =
-    cfg.ssl.mode === "clone"
-      ? { type: "clone", enable: true, clone: { certificate_id: cfg.ssl.certificateId } }
-      : { type: "letsencrypt", enable: true, letsencrypt: { verification_method: "http-01" } };
-  await forge.createCertificate(siteId, record.id, body);
+  await forge.createCertificate(siteId, record.id, {
+    type: "clone",
+    enable: true,
+    clone: { certificate_id: cfg.domain.certificateId },
+  });
 }
 
 async function up() {
