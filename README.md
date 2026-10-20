@@ -53,7 +53,8 @@ license-mismatch banner on previews. The front end is unaffected. Accepted for n
 ## One-time setup
 
 **Preview server.** In Forge, create a Laravel VPS app server (Ubuntu 24.04, MySQL, the PHP
-versions your sites need, Medium or Large, an EU region). Keep it separate from client production
+versions your sites need, Medium or Large, an EU region). Ubuntu 26.04 offers only PHP 8.4 and 8.5
+on Forge, so stay on 24.04 while any site in the fleet runs 8.2 or 8.3. Keep it separate from client production
 and staging servers. Confirm Redis is running (Forge app servers ship it; sites that cache in Redis
 expect it on localhost). Make sure Forge's GitHub connection can read every client repo that will
 use previews.
