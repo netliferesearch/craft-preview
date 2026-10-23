@@ -75,6 +75,8 @@ runs:
         CONFIG_PATH: ${{ inputs.config-path }}
       working-directory: ${{ inputs.workspace }}
       run: |
+        # A missing manifest is reported by the CLI with a clear message; nothing to presign here.
+        [ -f "$CONFIG_PATH" ] || exit 0
         key=$(jq -r '.snapshotKey // empty' "$CONFIG_PATH")
         if [ -n "$key" ]; then
           url=$(aws s3 presign "s3://$BUCKET/$key" --expires-in 604800 \

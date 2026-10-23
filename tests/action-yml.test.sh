@@ -21,6 +21,8 @@ test_action_yml_structure() {
       IO.popen(["bash","-n"], "w") { |io| io.write(s["run"]) }
       abort "step #{i} (#{s["name"]}) fails bash -n" unless $?.success?
     end
+    presign = a["runs"]["steps"].find { |s| s["id"] == "snapshot" }
+    abort "presign must tolerate a missing manifest" unless presign["run"].include?(%q{[ -f "$CONFIG_PATH" ]})
     run = a["runs"]["steps"].find { |s| s["id"] == "run" }
     %w[WORKSPACE ADMIN_EMAIL SNAPSHOT_URL EXTRA_ENV].each { |k| abort "run step must pass #{k}" unless run["env"].key?(k) }
     puts "ok"
@@ -35,6 +37,8 @@ test_example_workflow_gates_the_job() {
     abort "job needs a fork guard" unless cond.include?("head.repo.full_name == github.repository")
     abort "job needs the label guard" unless cond.include?("contains(github.event.pull_request.labels.*.name, '"'"'preview'"'"')")
     abort "job must still run for closed and sweep" unless cond.include?("closed") && cond.include?("pull_request")
+    ref = w.dig("jobs","preview","steps",0,"with","ref").to_s
+    abort "checkout must use the PR head ref so a closed, unmerged PR can still be torn down" unless ref.include?("refs/pull/") && ref.include?("pull_request.number")
     puts "ok"
   ' 2>&1)"
   assert_eq ok "$out" "preview.yml job if"

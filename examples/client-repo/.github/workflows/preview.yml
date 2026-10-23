@@ -34,8 +34,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # A closed PR's merge ref may be gone, so teardown reads config from the default branch.
-          ref: ${{ github.event.action == 'closed' && github.event.repository.default_branch || '' }}
+          # The PR's own head ref: GitHub keeps it even after the branch is deleted, so a closed PR
+          # can still be torn down, including a PR that introduces the manifest and never merges.
+          ref: ${{ github.event_name == 'pull_request' && format('refs/pull/{0}/head', github.event.pull_request.number) || '' }}
           # The manifest, and the site's example env that the preview .env is built on.
           sparse-checkout: |
             .craft-preview.json
