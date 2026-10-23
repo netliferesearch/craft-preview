@@ -35,6 +35,7 @@ export function resolveCommand(event: TriggerEvent, labelName = "preview"): Comm
   switch (event.action) {
     case "labeled":
       return eventLabel ? "up" : "skip";
+    case "opened": // Renovate applies labels at creation, so this is the only event it fires.
     case "synchronize":
     case "reopened":
       return hasLabel ? "up" : "skip";

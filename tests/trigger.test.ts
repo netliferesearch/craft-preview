@@ -48,3 +48,9 @@ test("readEvent attaches event_name to the payload", () => {
   writeFileSync(path, JSON.stringify({ action: "closed", repository: repo }));
   assert.deepEqual(readEvent("pull_request", path), { event_name: "pull_request", action: "closed", repository: repo });
 });
+
+// Renovate applies labels when it creates the PR, so the only event is `opened` with the label set.
+test("opened with the label → up, without → skip", () => {
+  assert.equal(resolveCommand(pr(["preview"], { action: "opened" })), "up");
+  assert.equal(resolveCommand(pr([], { action: "opened" })), "skip");
+});

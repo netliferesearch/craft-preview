@@ -90,13 +90,13 @@ Forge API v2 facts the design rests on. Source: the published OpenAPI spec at
 
 ### Triggers
 
-The client workflow runs on `pull_request` with types `labeled`, `unlabeled`, `synchronize`,
+The client workflow runs on `pull_request` with types `opened`, `labeled`, `unlabeled`, `synchronize`,
 `reopened`, `closed`, plus a nightly `schedule` and `workflow_dispatch` for the sweep.
 
 | Event | Condition | Command |
 | --- | --- | --- |
 | `labeled` with `preview` | label name is `preview` | `up` |
-| `synchronize`, `reopened` | PR has the `preview` label | `up` |
+| `opened`, `synchronize`, `reopened` | PR has the `preview` label (Renovate labels at creation, so `opened` is its only event) | `up` |
 | `unlabeled` | the removed label is `preview` | `down` |
 | `closed` | PR has the `preview` label, or had one (a site exists) | `down` |
 | `schedule`, `workflow_dispatch` | always | `sweep` |

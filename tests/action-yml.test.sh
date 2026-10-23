@@ -37,6 +37,8 @@ test_example_workflow_gates_the_job() {
     abort "job needs a fork guard" unless cond.include?("head.repo.full_name == github.repository")
     abort "job needs the label guard" unless cond.include?("contains(github.event.pull_request.labels.*.name, '"'"'preview'"'"')")
     abort "job must still run for closed and sweep" unless cond.include?("closed") && cond.include?("pull_request")
+    types = w.dig(true, "pull_request", "types") || w.dig("on", "pull_request", "types") || []
+    abort "pull_request types must include opened (Renovate labels at creation)" unless types.include?("opened")
     ref = w.dig("jobs","preview","steps",0,"with","ref").to_s
     abort "checkout must use the PR head ref so a closed, unmerged PR can still be torn down" unless ref.include?("refs/pull/") && ref.include?("pull_request.number")
     puts "ok"
